@@ -1,0 +1,10 @@
+exclude_dirs:
+
+- tests
+- myenv
+- .venv
+- ui
+- **pycache**
+- .pytest_cache
+- .mypy_cache
+- .ruff_cache

@@ -1,0 +1,9 @@
+SonarQube
+test case react python/node 
+Jinkins
+aws
+
+container deployment
+normal deployment
+ 
+https://www.youtube.com/watch?v=N-Iv4KIOvKY
