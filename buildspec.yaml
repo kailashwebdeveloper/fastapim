@@ -1,0 +1,33 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+
+    commands:
+      - echo "Installing dependencies..."
+      - python -m pip install --upgrade pip
+      - pip install -r requirements.txt
+
+  pre_build:
+    commands:
+      - echo "Running lint..."
+      # - ruff .
+      # - mypy .
+
+      - echo "Running tests..."
+      # - pytest
+
+  build:
+    commands:
+      - echo "Build started on $(date)"
+      - python -m compileall .
+
+  post_build:
+    commands:
+      - echo "Build completed on $(date)"
+
+artifacts:
+  files:
+    - '**/*'
