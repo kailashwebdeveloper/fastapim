@@ -3,7 +3,7 @@ set -xe
 
 echo "===== START INSTALL ====="
 
-APP_DIR=/home/ubuntu/python-app
+APP_DIR=/opt/python-app
 
 echo "Current user:"
 whoami
