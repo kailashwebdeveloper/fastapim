@@ -19,11 +19,17 @@ ls -la
 
 python3 --version
 
-# Create virtual environment only if it doesn't already exist
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
+# Remove existing virtual environment if it exists
+if [ -d "venv" ]; then
+    echo "Removing existing virtual environment..."
+    rm -rf venv
 fi
 
+# Create a fresh virtual environment
+echo "Creating new virtual environment..."
+python3 -m venv venv
+
+# Activate the virtual environment
 source venv/bin/activate
 
 python -m pip install --upgrade pip
