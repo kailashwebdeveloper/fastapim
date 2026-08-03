@@ -3,10 +3,10 @@ os: linux
 
 files:
   - source: /
-    destination: /opt/python-app
+    destination: /home/ubuntu/python-app
 
 permissions:
-  - object: /opt/python-app
+  - object: /home/ubuntu/python-app
     owner: ubuntu
     group: ubuntu
     mode: 755
