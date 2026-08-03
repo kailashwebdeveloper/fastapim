@@ -3,35 +3,26 @@ set -xe
 
 echo "===== START INSTALL ====="
 
+APP_DIR=/home/ubuntu/python-app
+
 echo "Current user:"
 whoami
+
+echo "Changing to application directory..."
+cd "$APP_DIR"
 
 echo "Current directory:"
 pwd
 
-echo "Files in current directory:"
-ls -la
-
-echo "Recursive listing:"
-find .
-
-APP_DIR=/opt/python-app
-
-mkdir -p "$APP_DIR"
-
-echo "Copying files..."
-cp -rv ./* "$APP_DIR"/
-
-echo "Copied successfully"
-
-cd "$APP_DIR"
-
-pwd
+echo "Application files:"
 ls -la
 
 python3 --version
 
-python3 -m venv venv
+# Create virtual environment only if it doesn't already exist
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
+fi
 
 source venv/bin/activate
 
