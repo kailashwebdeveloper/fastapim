@@ -9,7 +9,7 @@ permissions:
   - object: /opt/python-app
     owner: ubuntu
     group: ubuntu
-    mode: 755
+    mode: 775
     type:
       - file
       - directory
