@@ -1,0 +1,36 @@
+version: 0.0
+os: linux
+
+files:
+  - source: /
+    destination: /opt/python-app
+
+permissions:
+  - object: /opt/python-app
+    owner: ubuntu
+    group: ubuntu
+    mode: 775
+    type:
+      - file
+      - directory
+
+hooks:
+  ApplicationStop:
+    - location: scripts/stop.sh
+      timeout: 300
+      runas: root
+
+  BeforeInstall:
+    - location: scripts/install.sh
+      timeout: 900
+      runas: root
+
+  ApplicationStart:
+    - location: scripts/start.sh
+      timeout: 300
+      runas: root
+
+  ValidateService:
+    - location: scripts/validate.sh
+      timeout: 300
+      runas: root

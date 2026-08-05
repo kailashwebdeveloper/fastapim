@@ -1,3 +1,4 @@
 #!/bin/bash
 
-systemctl stop python-app || true
+docker stop fastapi-app || true
+docker rm fastapi-app || true

@@ -1,10 +1,14 @@
 #!/bin/bash
 set -e
+source deployment.env
 
-systemctl daemon-reload
+IMAGE=${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/python-fastapi:latest
 
-systemctl enable python-app
+docker pull $IMAGE
 
-systemctl restart python-app
-
-systemctl restart nginx
+docker run -d \
+  --name fastapi-app \
+  --restart unless-stopped \
+  -p 80:8000 \
+  --env-file /opt/python-app/.env \
+  $IMAGE
