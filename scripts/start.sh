@@ -9,6 +9,6 @@ docker pull $IMAGE
 docker run -d \
   --name fastapi-app \
   --restart unless-stopped \
-  -p 80:8000 \
+  -p 81:8000 \
   --env-file /opt/python-app/.env \
   $IMAGE
