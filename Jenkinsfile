@@ -1,1028 +1,212 @@
-pipeline {
-
-    agent any
-
-    options {
-        timestamps()
-
-        disableConcurrentBuilds()
-
-        timeout(
-            time: 30,
-            unit: 'MINUTES'
-        )
-
-        buildDiscarder(
-            logRotator(
-                numToKeepStr: '10',
-                daysToKeepStr: '30'
-            )
-        )
-    }
-
-    environment {
-
-        // =====================================================
-        // REMOTE SERVER
-        // =====================================================
-
-        REMOTE_USER = 'ubuntu'
-        REMOTE_HOST = '10.0.0.135'
-
-        // =====================================================
-        // APPLICATION
-        // =====================================================
-
-        REMOTE_APP_DIR = '/opt/fastapi-app'
-
-        // =====================================================
-        // SYSTEMD SERVICE
-        // =====================================================
-
-        SERVICE_NAME = 'python-app'
-
-        // =====================================================
-        // FASTAPI PORT
-        // =====================================================
-
-        PORT = '8001'
-
-        // =====================================================
-        // PYTHON
-        // =====================================================
-
-        PYTHON_BIN = 'python3.14'
-
-        // =====================================================
-        // SSH PRIVATE KEY
-        // =====================================================
-
-        SSH_KEY = '/var/lib/jenkins/ssh/mykey'
-    }
-
-
-    stages {
-
-        // =====================================================
-        // 1. CHECKOUT
-        // =====================================================
-
-        stage('Checkout') {
-
-            steps {
-
-                echo '''
-========================================
-          CHECKOUT STAGE
-========================================
-'''
-
-                checkout scm
-
-                sh '''
-                    set -eu
-
-                    echo "Current directory:"
-                    pwd
-
-                    echo ""
-                    echo "Git commit:"
-                    git rev-parse HEAD
-
-                    echo ""
-                    echo "Git branch:"
-                    git branch --show-current || true
-
-                    echo ""
-                    echo "Files:"
-                    ls -la
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 2. VERIFY JENKINS ENVIRONMENT
-        // =====================================================
-
-        stage('Verify Jenkins Environment') {
-
-            steps {
-
-                echo '''
-========================================
-     VERIFY JENKINS ENVIRONMENT
-========================================
-'''
-
-                sh '''
-                    set -eu
-
-                    echo "Jenkins user:"
-                    whoami
-
-                    echo ""
-                    echo "Python:"
-                    python3 --version
-
-                    echo ""
-                    echo "Git:"
-                    git --version
-
-                    echo ""
-                    echo "SSH:"
-                    ssh -V 2>&1
-
-                    echo ""
-                    echo "Rsync:"
-                    rsync --version | head -n 1
-
-                    echo ""
-                    echo "SSH key:"
-                    ls -l "${SSH_KEY}"
-
-                    echo ""
-                    echo "SSH key permissions:"
-                    stat -c "%U:%G %a %n" "${SSH_KEY}"
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 3. TEST SSH CONNECTION
-        // =====================================================
-
-        stage('Test SSH Connection') {
-
-            steps {
-
-                echo '''
-========================================
-         TEST SSH CONNECTION
-========================================
-'''
-
-                sh '''
-                    set -eu
-
-                    echo "Remote user:"
-                    echo "${REMOTE_USER}"
-
-                    echo "Remote host:"
-                    echo "${REMOTE_HOST}"
-
-                    echo "SSH key:"
-                    echo "${SSH_KEY}"
-
-                    echo ""
-                    echo "Testing SSH connection..."
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "echo 'SSH connection successful'"
-
-                    echo ""
-                    echo "Testing remote hostname..."
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "hostname"
-
-                    echo ""
-                    echo "SSH connection verified successfully."
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 4. BUILD
-        // =====================================================
-
-        stage('Build') {
-
-            steps {
-
-                echo '''
-========================================
-             BUILD STAGE
-========================================
-'''
-
-                sh '''
-                    set -eu
-
-                    echo "Python version:"
-                    python3 --version
-
-                    echo ""
-                    echo "Creating build virtual environment..."
-
-                    rm -rf .build-venv
-
-                    python3 -m venv .build-venv
-
-                    echo ""
-                    echo "Upgrading pip..."
-
-                    .build-venv/bin/python \
-                        -m pip install --upgrade pip
-
-                    echo ""
-                    echo "Installing dependencies..."
-
-                    .build-venv/bin/python \
-                        -m pip install -r requirements.txt
-
-                    echo ""
-                    echo "Compiling Python source..."
-
-                    .build-venv/bin/python \
-                        -m compileall .
-
-                    echo ""
-                    echo "========================================"
-                    echo "        BUILD SUCCESSFUL"
-                    echo "========================================"
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 5. DEPLOY APPLICATION
-        // =====================================================
-
-        stage('Deploy Application') {
-
-            steps {
-
-                echo '''
-========================================
-       DEPLOY APPLICATION
-========================================
-'''
-
-                sh '''
-                    set -eu
-
-                    echo "Remote server:"
-                    echo "${REMOTE_USER}@${REMOTE_HOST}"
-
-                    echo ""
-                    echo "Remote application directory:"
-                    echo "${REMOTE_APP_DIR}"
-
-                    echo ""
-                    echo "Creating remote application directory..."
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "sudo mkdir -p '${REMOTE_APP_DIR}' && \
-                         sudo chown -R '${REMOTE_USER}:${REMOTE_USER}' '${REMOTE_APP_DIR}'"
-
-                    echo ""
-                    echo "Copying application..."
-
-                    rsync \
-                        -avz \
-                        --delete \
-                        --exclude='.git' \
-                        --exclude='.build-venv' \
-                        --exclude='venv' \
-                        --exclude='.env' \
-                        --exclude='__pycache__' \
-                        --exclude='*.pyc' \
-                        -e "ssh -i '${SSH_KEY}' -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no" \
-                        ./ \
-                        "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_APP_DIR}/"
-
-                    echo ""
-                    echo "Application copied successfully."
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 6. VERIFY REMOTE FILES
-        // =====================================================
-
-        stage('Verify Remote Files') {
-
-            steps {
-
-                echo '''
-========================================
-         VERIFY REMOTE FILES
-========================================
-'''
-
-                sh '''
-                    set -eu
-
-                    echo "Checking application directory..."
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "ls -la '${REMOTE_APP_DIR}'"
-
-                    echo ""
-                    echo "Checking requirements.txt..."
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "test -f '${REMOTE_APP_DIR}/requirements.txt'"
-
-                    echo "requirements.txt found."
-
-                    echo ""
-                    echo "Checking systemd service file..."
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "test -f '${REMOTE_APP_DIR}/service/${SERVICE_NAME}.service'"
-
-                    echo "Systemd service file found."
-
-                    echo ""
-                    echo "Remote files verified successfully."
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 7. INSTALL REMOTE DEPENDENCIES
-        // =====================================================
-
-        stage('Install Remote Dependencies') {
-
-            steps {
-
-                echo '''
-========================================
-     INSTALL REMOTE DEPENDENCIES
-========================================
-'''
-
-                sh '''
-                    set -eu
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "REMOTE_APP_DIR='${REMOTE_APP_DIR}' PYTHON_BIN='${PYTHON_BIN}' bash -s" << 'REMOTE_SCRIPT'
-
-set -eu
-
-echo "========================================"
-echo "REMOTE DEPENDENCY INSTALLATION"
-echo "========================================"
-
-cd "${REMOTE_APP_DIR}"
-
-echo ""
-echo "Application directory:"
-pwd
-
-
-# =====================================================
-# CHECK PYTHON
-# =====================================================
-
-echo ""
-echo "Checking Python..."
-
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-
-    echo ""
-    echo "ERROR: ${PYTHON_BIN} is not installed."
-
-    echo ""
-    echo "Available Python versions:"
-
-    command -v python3 || true
-    python3 --version || true
-
-    exit 1
-
-fi
-
-
-echo ""
-echo "Python version:"
-
-"${PYTHON_BIN}" --version
-
-
-# =====================================================
-# CHECK / INSTALL PYTHON VENV PACKAGE
-# =====================================================
-
-echo ""
-echo "Checking Python virtual environment support..."
-
-
-if "${PYTHON_BIN}" -m venv --help >/dev/null 2>&1; then
-
-    echo "Python venv support is already available."
-
-else
-
-    echo ""
-    echo "Python venv support is missing."
-
-    echo ""
-    echo "Installing python3.14-venv..."
-
-    sudo apt-get update
-
-    sudo apt-get install -y python3.14-venv
-
-fi
-
-
-# =====================================================
-# VERIFY VENV AFTER INSTALLATION
-# =====================================================
-
-echo ""
-echo "Verifying Python venv support..."
-
-if ! "${PYTHON_BIN}" -m venv --help >/dev/null 2>&1; then
-
-    echo ""
-    echo "ERROR: Python venv support is still unavailable."
-
-    echo ""
-    echo "Installed Python packages:"
-
-    dpkg -l | grep -E 'python3.14|python3-venv' || true
-
-    exit 1
-
-fi
-
-
-echo ""
-echo "Python venv support verified successfully."
-
-
-# =====================================================
-# CREATE PRODUCTION VIRTUAL ENVIRONMENT
-# =====================================================
-
-echo ""
-echo "Creating production virtual environment..."
-
-
-if [ -d "venv" ]; then
-
-    echo "Existing virtual environment found."
-
-    echo "Removing old virtual environment..."
-
-    rm -rf venv
-
-fi
-
-
-"${PYTHON_BIN}" -m venv venv
-
-
-echo ""
-echo "Production virtual environment created."
-
-
-# =====================================================
-# VERIFY VIRTUAL ENVIRONMENT
-# =====================================================
-
-echo ""
-echo "Verifying virtual environment..."
-
-if [ ! -x "venv/bin/python" ]; then
-
-    echo ""
-    echo "ERROR: venv/bin/python was not created."
-
-    exit 1
-
-fi
-
-
-echo ""
-echo "Virtual environment Python:"
-
-./venv/bin/python --version
-
-
-echo ""
-echo "Virtual environment pip:"
-
-./venv/bin/python -m pip --version
-
-
-# =====================================================
-# UPGRADE PIP
-# =====================================================
-
-echo ""
-echo "Upgrading pip..."
-
-./venv/bin/python \
-    -m pip install --upgrade pip
-
-
-# =====================================================
-# INSTALL APPLICATION DEPENDENCIES
-# =====================================================
-
-echo ""
-echo "Installing application dependencies..."
-
-./venv/bin/python \
-    -m pip install \
-    --no-cache-dir \
-    -r requirements.txt
-
-
-# =====================================================
-# VERIFY IMPORTANT PACKAGES
-# =====================================================
-
-echo ""
-echo "Verifying FastAPI installation..."
-
-./venv/bin/python \
-    -c "import fastapi; print('FastAPI:', fastapi.__version__)"
-
-
-echo ""
-echo "Verifying Uvicorn installation..."
-
-./venv/bin/python \
-    -c "import uvicorn; print('Uvicorn:', uvicorn.__version__)"
-
-
-echo ""
-echo "========================================"
-echo " REMOTE DEPENDENCIES INSTALLED SUCCESSFULLY"
-echo "========================================"
-
-REMOTE_SCRIPT
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 8. INSTALL SYSTEMD SERVICE
-        // =====================================================
-
-        stage('Install Systemd Service') {
-
-            steps {
-
-                echo '''
-========================================
-       INSTALL SYSTEMD SERVICE
-========================================
-'''
-
-                sh '''
-                    set -eu
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "REMOTE_APP_DIR='${REMOTE_APP_DIR}' SERVICE_NAME='${SERVICE_NAME}' bash -s" << 'REMOTE_SCRIPT'
-
-set -eu
-
-echo "========================================"
-echo "SYSTEMD SERVICE INSTALLATION"
-echo "========================================"
-
-
-SERVICE_SOURCE="${REMOTE_APP_DIR}/service/${SERVICE_NAME}.service"
-
-SERVICE_DEST="/etc/systemd/system/${SERVICE_NAME}.service"
-
-
-echo ""
-echo "Service source:"
-echo "${SERVICE_SOURCE}"
-
-echo ""
-echo "Service destination:"
-echo "${SERVICE_DEST}"
-
-
-if [ ! -f "${SERVICE_SOURCE}" ]; then
-
-    echo ""
-    echo "ERROR: Service file not found:"
-    echo "${SERVICE_SOURCE}"
-
-    exit 1
-
-fi
-
-
-echo ""
-echo "Installing systemd service..."
-
-sudo cp \
-    "${SERVICE_SOURCE}" \
-    "${SERVICE_DEST}"
-
-
-sudo chmod 644 \
-    "${SERVICE_DEST}"
-
-
-echo ""
-echo "Reloading systemd..."
-
-sudo systemctl daemon-reload
-
-
-echo ""
-echo "Enabling service..."
-
-sudo systemctl enable "${SERVICE_NAME}"
-
-
-echo ""
-echo "Systemd service installed successfully."
-
-REMOTE_SCRIPT
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 9. RESTART APPLICATION
-        // =====================================================
-
-        stage('Restart Application') {
-
-            steps {
-
-                echo '''
-========================================
-        RESTART APPLICATION
-========================================
-'''
-
-                sh '''
-                    set -eu
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "SERVICE_NAME='${SERVICE_NAME}' bash -s" << 'REMOTE_SCRIPT'
-
-set -eu
-
-echo "========================================"
-echo "RESTART APPLICATION"
-echo "========================================"
-
-
-echo ""
-echo "Restarting service..."
-
-sudo systemctl restart "${SERVICE_NAME}"
-
-
-echo ""
-echo "Waiting for application to start..."
-
-sleep 5
-
-
-echo ""
-echo "Checking service status..."
-
-
-if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
-
-    echo ""
-    echo "FastAPI service is running successfully."
-
-else
-
-    echo ""
-    echo "ERROR: FastAPI service failed to start."
-
-    echo ""
-    echo "Systemd status:"
-
-    sudo systemctl status \
-        "${SERVICE_NAME}" \
-        --no-pager || true
-
-
-    echo ""
-    echo "Recent application logs:"
-
-    sudo journalctl \
-        -u "${SERVICE_NAME}" \
-        -n 100 \
-        --no-pager || true
-
-
-    exit 1
-
-fi
-
-
-REMOTE_SCRIPT
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 10. HEALTH CHECK
-        // =====================================================
-
-        stage('Health Check') {
-
-            steps {
-
-                echo '''
-========================================
-           HEALTH CHECK
-========================================
-'''
-
-                sh '''
-                    set -eu
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "PORT='${PORT}' SERVICE_NAME='${SERVICE_NAME}' bash -s" << 'REMOTE_SCRIPT'
-
-set -eu
-
-echo "========================================"
-echo "FASTAPI HEALTH CHECK"
-echo "========================================"
-
-
-echo ""
-echo "Checking port ${PORT}..."
-
-
-if sudo ss -lntp | grep -q ":${PORT} "; then
-
-    echo "Port ${PORT} is listening."
-
-else
-
-    echo ""
-    echo "ERROR: Port ${PORT} is not listening."
-
-    echo ""
-    echo "Systemd status:"
-
-    sudo systemctl status \
-        "${SERVICE_NAME}" \
-        --no-pager || true
-
-
-    echo ""
-    echo "Application logs:"
-
-    sudo journalctl \
-        -u "${SERVICE_NAME}" \
-        -n 100 \
-        --no-pager || true
-
-
-    exit 1
-
-fi
-
-
-echo ""
-echo "Checking FastAPI /docs endpoint..."
-
-
-HTTP_STATUS=$(curl \
-    -s \
-    -o /tmp/fastapi_response.txt \
-    -w "%{http_code}" \
-    --connect-timeout 10 \
-    --max-time 15 \
-    "http://127.0.0.1:${PORT}/docs")
-
-
-echo ""
-echo "HTTP Status: ${HTTP_STATUS}"
-
-
-if [ "${HTTP_STATUS}" = "200" ]; then
-
-    echo ""
-    echo "FastAPI health check successful."
-
-else
-
-    echo ""
-    echo "ERROR: FastAPI returned HTTP ${HTTP_STATUS}."
-
-    echo ""
-    echo "Response:"
-
-    cat /tmp/fastapi_response.txt || true
-
-
-    echo ""
-    echo "Systemd status:"
-
-    sudo systemctl status \
-        "${SERVICE_NAME}" \
-        --no-pager || true
-
-
-    echo ""
-    echo "Application logs:"
-
-    sudo journalctl \
-        -u "${SERVICE_NAME}" \
-        -n 100 \
-        --no-pager || true
-
-
-    exit 1
-
-fi
-
-
-echo ""
-echo "========================================"
-echo "       HEALTH CHECK SUCCESSFUL"
-echo "========================================"
-
-REMOTE_SCRIPT
-                '''
-            }
-        }
-
-
-        // =====================================================
-        // 11. DEPLOYMENT INFORMATION
-        // =====================================================
-
-        stage('Deployment Information') {
-
-            steps {
-
-                echo '''
-========================================
-       DEPLOYMENT INFORMATION
-========================================
-'''
-
-                sh '''
-                    set -eu
-
-                    ssh \
-                        -i "${SSH_KEY}" \
-                        -o BatchMode=yes \
-                        -o ConnectTimeout=10 \
-                        -o StrictHostKeyChecking=no \
-                        "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "SERVICE_NAME='${SERVICE_NAME}' PORT='${PORT}' REMOTE_APP_DIR='${REMOTE_APP_DIR}' bash -s" << 'REMOTE_SCRIPT'
-
-set -eu
-
-echo ""
-echo "========================================"
-echo "DEPLOYMENT DETAILS"
-echo "========================================"
-
-echo ""
-echo "Server:"
-hostname
-
-echo ""
-echo "Application:"
-echo "${SERVICE_NAME}"
-
-echo ""
-echo "Port:"
-echo "${PORT}"
-
-echo ""
-echo "Application directory:"
-echo "${REMOTE_APP_DIR}"
-
-echo ""
-echo "Service status:"
-
-sudo systemctl status \
-    "${SERVICE_NAME}" \
-    --no-pager
-
-echo ""
-echo "Listening port:"
-
-sudo ss -lntp | grep ":${PORT} " || true
-
-REMOTE_SCRIPT
-                '''
-            }
-        }
-    }
-
-
-    // =====================================================
-    // POST BUILD
-    // =====================================================
-
-    post {
-
-        success {
-
-            echo '''
-========================================
-       DEPLOYMENT SUCCESSFUL
-========================================
-'''
-
-            echo "Application : ${SERVICE_NAME}"
-            echo "Server      : ${REMOTE_HOST}"
-            echo "Port        : ${PORT}"
-            echo "Directory   : ${REMOTE_APP_DIR}"
-        }
-
-
-        failure {
-
-            echo '''
-========================================
-         DEPLOYMENT FAILED
-========================================
-'''
-
-            echo "Application : ${SERVICE_NAME}"
-            echo "Server      : ${REMOTE_HOST}"
-            echo "Port        : ${PORT}"
-        }
-
-
-        always {
-
-            echo "Cleaning Jenkins workspace..."
-
-            sh '''
-                rm -rf .build-venv || true
-            '''
-        }
-    }
-}
+13:39:36  + echo         BUILD SUCCESSFUL
+13:39:36          BUILD SUCCESSFUL
+13:39:36  + echo ========================================
+13:39:36  ========================================
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Deploy Application)
+[Pipeline] echo
+13:39:36  
+13:39:36  ========================================
+13:39:36         DEPLOY APPLICATION
+13:39:36  ========================================
+13:39:36  
+[Pipeline] sh
+13:39:36  + set -eu
+13:39:36  + echo Remote server:
+13:39:36  Remote server:
+13:39:36  + echo ubuntu@10.0.0.135
+13:39:36  ubuntu@10.0.0.135
+13:39:36  + echo 
+13:39:36  
+13:39:36  + echo Remote application directory:
+13:39:36  Remote application directory:
+13:39:36  + echo /opt/fastapi-app
+13:39:36  /opt/fastapi-app
+13:39:36  + echo 
+13:39:36  
+13:39:36  + echo Creating remote application directory...
+13:39:36  Creating remote application directory...
+13:39:36  + ssh -i /var/lib/jenkins/ssh/mykey -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no ubuntu@10.0.0.135 sudo mkdir -p '/opt/fastapi-app' &&                          sudo chown -R 'ubuntu:ubuntu' '/opt/fastapi-app'
+13:39:37  + echo 
+13:39:37  
+13:39:37  + echo Copying application...
+13:39:37  Copying application...
+13:39:37  + rsync -avz --delete --exclude=.git --exclude=.build-venv --exclude=venv --exclude=.env --exclude=__pycache__ --exclude=*.pyc -e ssh -i '/var/lib/jenkins/ssh/mykey' -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no ./ ubuntu@10.0.0.135:/opt/fastapi-app/
+13:39:37  sending incremental file list
+13:39:37  ./
+13:39:37  Jenkinsfile
+13:39:37  
+13:39:37  sent 2,565 bytes  received 224 bytes  5,578.00 bytes/sec
+13:39:37  total size is 53,040  speedup is 19.02
+13:39:37  + echo 
+13:39:37  
+13:39:37  + echo Application copied successfully.
+13:39:37  Application copied successfully.
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Verify Remote Files)
+[Pipeline] echo
+13:39:37  
+13:39:37  ========================================
+13:39:37           VERIFY REMOTE FILES
+13:39:37  ========================================
+13:39:37  
+[Pipeline] sh
+13:39:37  + set -eu
+13:39:37  + echo Checking application directory...
+13:39:37  Checking application directory...
+13:39:37  + ssh -i /var/lib/jenkins/ssh/mykey -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no ubuntu@10.0.0.135 ls -la '/opt/fastapi-app'
+13:39:37  total 140
+13:39:37  drwxr-xr-x 8 ubuntu ubuntu  4096 Aug 16 08:09 .
+13:39:37  drwxr-xr-x 3 root   root    4096 Aug 16 07:41 ..
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu   102 Aug 16 05:00 .bandit
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu    96 Aug 16 05:00 .dockerignore
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu  1450 Aug 16 05:00 Dockerfile
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu 23271 Aug 16 08:09 Jenkinsfile
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu   136 Aug 16 05:00 New Text Document.txt
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu   174 Aug 16 05:00 README.md
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu  5899 Aug 16 05:00 TESTING.md
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu  5537 Aug 16 05:00 UI_TESTING.md
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu   581 Aug 16 05:00 appspec copy.yaml
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu   581 Aug 16 05:00 appspec.yaml
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu   558 Aug 16 05:00 buildspec copy.yaml
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu   877 Aug 16 05:00 buildspec.yaml
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu   177 Aug 16 05:00 db.py
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu  1286 Aug 16 05:00 docker-compose.yml
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu  5932 Aug 16 05:00 main.py
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu    92 Aug 16 05:00 package-lock.json
+13:39:37  drwxr-xr-x 2 ubuntu ubuntu  4096 Aug 16 05:00 postgres
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu    60 Aug 16 05:00 pytest.ini
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu    87 Aug 16 05:00 requirements.txt
+13:39:37  -rw-r--r-- 1 ubuntu ubuntu   536 Aug 16 05:00 run_quality_checks.bat
+13:39:37  drwxr-xr-x 2 ubuntu ubuntu  4096 Aug 16 05:00 scripts
+13:39:37  drwxr-xr-x 2 ubuntu ubuntu  4096 Aug 16 05:00 scripts copy
+13:39:37  drwxr-xr-x 2 ubuntu ubuntu  4096 Aug 16 05:00 service
+13:39:37  drwxr-xr-x 2 ubuntu ubuntu  4096 Aug 16 05:00 tests
+13:39:37  drwxrwxr-x 5 ubuntu ubuntu  4096 Aug 16 07:41 venv
+13:39:37  + echo 
+13:39:37  
+13:39:37  + echo Checking requirements.txt...
+13:39:37  Checking requirements.txt...
+13:39:37  + ssh -i /var/lib/jenkins/ssh/mykey -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no ubuntu@10.0.0.135 test -f '/opt/fastapi-app/requirements.txt'
+13:39:38  + echo requirements.txt found.
+13:39:38  requirements.txt found.
+13:39:38  + echo 
+13:39:38  
+13:39:38  + echo Checking systemd service file...
+13:39:38  Checking systemd service file...
+13:39:38  + ssh -i /var/lib/jenkins/ssh/mykey -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no ubuntu@10.0.0.135 test -f '/opt/fastapi-app/service/python-app.service'
+13:39:38  + echo Systemd service file found.
+13:39:38  Systemd service file found.
+13:39:38  + echo 
+13:39:38  
+13:39:38  + echo Remote files verified successfully.
+13:39:38  Remote files verified successfully.
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Install Remote Dependencies)
+[Pipeline] echo
+13:39:38  
+13:39:38  ========================================
+13:39:38       INSTALL REMOTE DEPENDENCIES
+13:39:38  ========================================
+13:39:38  
+[Pipeline] sh
+13:39:38  + set -eu
+13:39:38  + ssh -i /var/lib/jenkins/ssh/mykey -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no ubuntu@10.0.0.135 REMOTE_APP_DIR='/opt/fastapi-app' PYTHON_BIN='python3.14' bash -s
+13:39:38  ========================================
+13:39:38  REMOTE DEPENDENCY INSTALLATION
+13:39:38  ========================================
+13:39:38  
+13:39:38  Application directory:
+13:39:38  /opt/fastapi-app
+13:39:38  
+13:39:38  Checking Python...
+13:39:38  
+13:39:38  Python version:
+13:39:38  Python 3.14.4
+13:39:38  
+13:39:38  Checking Python virtual environment support...
+13:39:38  Python venv support is already available.
+13:39:38  
+13:39:38  Verifying Python venv support...
+13:39:38  
+13:39:38  Python venv support verified successfully.
+13:39:38  
+13:39:38  Creating production virtual environment...
+13:39:38  Existing virtual environment found.
+13:39:38  Removing old virtual environment...
+13:39:38  The virtual environment was not created successfully because ensurepip is not
+13:39:38  available.  On Debian/Ubuntu systems, you need to install the python3-venv
+13:39:38  package using the following command.
+13:39:38  
+13:39:38      apt install python3.14-venv
+13:39:38  
+13:39:38  You may need to use sudo with that command.  After installing the python3-venv
+13:39:38  package, recreate your virtual environment.
+13:39:38  
+13:39:38  Failing command: /opt/fastapi-app/venv/bin/python3.14
+13:39:38  
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Install Systemd Service)
+Stage "Install Systemd Service" skipped due to earlier failure(s)
+[Pipeline] getContext
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Restart Application)
+Stage "Restart Application" skipped due to earlier failure(s)
+[Pipeline] getContext
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Health Check)
+Stage "Health Check" skipped due to earlier failure(s)
+[Pipeline] getContext
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Deployment Information)
+Stage "Deployment Information" skipped due to earlier failure(s)
+[Pipeline] getContext
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Declarative: Post Actions)
+[Pipeline] echo
+13:39:39  Cleaning Jenkins workspace...
+[Pipeline] sh
+13:39:40  + rm -rf .build-venv
+[Pipeline] echo
+13:39:40  
+13:39:40  ========================================
+13:39:40           DEPLOYMENT FAILED
+13:39:40  ========================================
+13:39:40  
+[Pipeline] echo
+13:39:40  Application : python-app
+[Pipeline] echo
+13:39:40  Server      : 10.0.0.135
+[Pipeline] echo
+13:39:40  Port        : 8001
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] }
+[Pipeline] // timeout
+[Pipeline] }
+[Pipeline] // timestamps
+[Pipeline] }
+[Pipeline] // withEnv
+[Pipeline] }
+[Pipeline] // withEnv
+[Pipeline] }
+[Pipeline] // node
+[Pipeline] End of Pipeline
+ERROR: script returned exit code 1
+Finished: FAILURE
