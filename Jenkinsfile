@@ -4,6 +4,7 @@ pipeline {
 
     options {
         timestamps()
+
         disableConcurrentBuilds()
 
         timeout(
@@ -50,12 +51,11 @@ pipeline {
         // SSH PRIVATE KEY
         // =====================================================
 
-        SSH_KEY = '/home/ubuntu/.ssh/mykey'
+        SSH_KEY = '/var/lib/jenkins/ssh/mykey'
     }
 
 
     stages {
-
 
         // =====================================================
         // 1. CHECKOUT
