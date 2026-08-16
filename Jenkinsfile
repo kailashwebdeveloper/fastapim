@@ -6,7 +6,10 @@ pipeline {
         timestamps()
         disableConcurrentBuilds()
 
-        timeout(time: 20, unit: 'MINUTES')
+        timeout(
+            time: 30,
+            unit: 'MINUTES'
+        )
 
         buildDiscarder(
             logRotator(
@@ -18,68 +21,55 @@ pipeline {
 
     environment {
 
-        // ============================================
+        // =====================================================
         // REMOTE SERVER
-        // ============================================
+        // =====================================================
 
         REMOTE_USER = 'ubuntu'
         REMOTE_HOST = '10.0.0.135'
 
+        // =====================================================
+        // APPLICATION
+        // =====================================================
+
         REMOTE_APP_DIR = '/opt/fastapi-app'
 
-        // ============================================
-        // SYSTEMD
-        // ============================================
+        // =====================================================
+        // SYSTEMD SERVICE
+        // =====================================================
 
         SERVICE_NAME = 'python-app'
 
-        // ============================================
-        // FASTAPI
-        // ============================================
+        // =====================================================
+        // FASTAPI PORT
+        // =====================================================
 
         PORT = '8001'
 
-        // ============================================
-        // SSH
-        // ============================================
+        // =====================================================
+        // SSH PRIVATE KEY
+        // =====================================================
 
-        /*
-         * Create this SSH credential in Jenkins:
-         *
-         * Manage Jenkins
-         *     -> Credentials
-         *     -> Global
-         *     -> Add Credentials
-         *
-         * Kind:
-         *     SSH Username with private key
-         *
-         * ID:
-         *     fastapi-ec2-ssh
-         *
-         * Username:
-         *     ubuntu
-         *
-         * Private Key:
-         *     Your EC2 SSH private key
-         */
-        SSH_CREDENTIAL_ID = 'fastapi-ec2-ssh'
+        SSH_KEY = '/home/ubuntu/.ssh/mykey'
     }
 
 
     stages {
 
-        // =========================================================
-        // STAGE 1 - CHECKOUT
-        // =========================================================
+
+        // =====================================================
+        // 1. CHECKOUT
+        // =====================================================
 
         stage('Checkout') {
 
             steps {
 
-                echo '========================================'
-                echo '          CHECKOUT STAGE'
-                echo '========================================'
+                echo '''
+========================================
+          CHECKOUT STAGE
+========================================
+'''
 
                 checkout scm
 
@@ -105,17 +95,19 @@ pipeline {
         }
 
 
-        // =========================================================
-        // STAGE 2 - VERIFY JENKINS ENVIRONMENT
-        // =========================================================
+        // =====================================================
+        // 2. VERIFY JENKINS ENVIRONMENT
+        // =====================================================
 
         stage('Verify Jenkins Environment') {
 
             steps {
 
-                echo '========================================'
-                echo '     VERIFY JENKINS ENVIRONMENT'
-                echo '========================================'
+                echo '''
+========================================
+     VERIFY JENKINS ENVIRONMENT
+========================================
+'''
 
                 sh '''
                     set -eu
@@ -124,70 +116,101 @@ pipeline {
                     whoami
 
                     echo ""
-                    echo "Python version:"
+                    echo "Python:"
                     python3 --version
 
                     echo ""
-                    echo "Git version:"
+                    echo "Git:"
                     git --version
 
                     echo ""
-                    echo "SSH version:"
+                    echo "SSH:"
                     ssh -V 2>&1
 
                     echo ""
-                    echo "Rsync version:"
+                    echo "Rsync:"
                     rsync --version | head -n 1
+
+                    echo ""
+                    echo "SSH key:"
+                    ls -l "${SSH_KEY}"
+
+                    echo ""
+                    echo "SSH key permissions:"
+                    stat -c "%U:%G %a %n" "${SSH_KEY}"
                 '''
             }
         }
 
 
-        // =========================================================
-        // STAGE 3 - TEST SSH CONNECTION
-        // =========================================================
+        // =====================================================
+        // 3. TEST SSH CONNECTION
+        // =====================================================
 
         stage('Test SSH Connection') {
 
             steps {
 
-                echo '========================================'
-                echo '         TEST SSH CONNECTION'
-                echo '========================================'
+                echo '''
+========================================
+         TEST SSH CONNECTION
+========================================
+'''
 
-                sshagent(credentials: [env.SSH_CREDENTIAL_ID]) {
+                sh '''
+                    set -eu
 
-                    sh '''
-                        set -eu
+                    echo "Remote user:"
+                    echo "${REMOTE_USER}"
 
-                        echo "Testing SSH connection to:"
-                        echo "${REMOTE_USER}@${REMOTE_HOST}"
+                    echo "Remote host:"
+                    echo "${REMOTE_HOST}"
 
-                        ssh \
-                            -o BatchMode=yes \
-                            -o ConnectTimeout=10 \
-                            -o StrictHostKeyChecking=no \
-                            ${REMOTE_USER}@${REMOTE_HOST} \
-                            "echo 'SSH connection successful'"
+                    echo "SSH key:"
+                    echo "${SSH_KEY}"
 
-                        echo "SSH connection verified successfully."
-                    '''
-                }
+                    echo ""
+                    echo "Testing SSH connection..."
+
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "echo 'SSH connection successful'"
+
+                    echo ""
+                    echo "Testing remote hostname..."
+
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "hostname"
+
+                    echo ""
+                    echo "SSH connection verified successfully."
+                '''
             }
         }
 
 
-        // =========================================================
-        // STAGE 4 - BUILD
-        // =========================================================
+        // =====================================================
+        // 4. BUILD
+        // =====================================================
 
         stage('Build') {
 
             steps {
 
-                echo '========================================'
-                echo '             BUILD STAGE'
-                echo '========================================'
+                echo '''
+========================================
+             BUILD STAGE
+========================================
+'''
 
                 sh '''
                     set -eu
@@ -229,140 +252,149 @@ pipeline {
         }
 
 
-        // =========================================================
-        // STAGE 5 - DEPLOY APPLICATION
-        // =========================================================
+        // =====================================================
+        // 5. DEPLOY APPLICATION
+        // =====================================================
 
         stage('Deploy Application') {
 
             steps {
 
-                echo '========================================'
-                echo '       DEPLOY APPLICATION'
-                echo '========================================'
+                echo '''
+========================================
+       DEPLOY APPLICATION
+========================================
+'''
 
-                sshagent(credentials: [env.SSH_CREDENTIAL_ID]) {
+                sh '''
+                    set -eu
 
-                    sh '''
-                        set -eu
+                    echo "Remote server:"
+                    echo "${REMOTE_USER}@${REMOTE_HOST}"
 
-                        echo "Remote server:"
-                        echo "${REMOTE_USER}@${REMOTE_HOST}"
+                    echo ""
+                    echo "Remote application directory:"
+                    echo "${REMOTE_APP_DIR}"
 
-                        echo ""
-                        echo "Remote application directory:"
-                        echo "${REMOTE_APP_DIR}"
+                    echo ""
+                    echo "Creating remote application directory..."
 
-                        echo ""
-                        echo "Creating remote application directory..."
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "sudo mkdir -p '${REMOTE_APP_DIR}' && \
+                         sudo chown -R '${REMOTE_USER}:${REMOTE_USER}' '${REMOTE_APP_DIR}'"
 
-                        ssh \
-                            -o BatchMode=yes \
-                            -o ConnectTimeout=10 \
-                            -o StrictHostKeyChecking=no \
-                            ${REMOTE_USER}@${REMOTE_HOST} \
-                            "sudo mkdir -p '${REMOTE_APP_DIR}' && \
-                             sudo chown -R '${REMOTE_USER}:${REMOTE_USER}' '${REMOTE_APP_DIR}'"
+                    echo ""
+                    echo "Copying application..."
 
-                        echo ""
-                        echo "Copying application..."
+                    rsync \
+                        -avz \
+                        --delete \
+                        --exclude='.git' \
+                        --exclude='.build-venv' \
+                        --exclude='venv' \
+                        --exclude='.env' \
+                        --exclude='__pycache__' \
+                        --exclude='*.pyc' \
+                        -e "ssh -i '${SSH_KEY}' -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no" \
+                        ./ \
+                        "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_APP_DIR}/"
 
-                        rsync -avz \
-                            --delete \
-                            --exclude='.git' \
-                            --exclude='.build-venv' \
-                            --exclude='venv' \
-                            --exclude='.env' \
-                            --exclude='__pycache__' \
-                            --exclude='*.pyc' \
-                            -e "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no" \
-                            ./ \
-                            ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_APP_DIR}/
-
-                        echo ""
-                        echo "Application copied successfully."
-
-                        echo ""
-                        echo "Remote application files:"
-
-                        ssh \
-                            -o BatchMode=yes \
-                            -o ConnectTimeout=10 \
-                            -o StrictHostKeyChecking=no \
-                            ${REMOTE_USER}@${REMOTE_HOST} \
-                            "ls -la '${REMOTE_APP_DIR}'"
-                    '''
-                }
+                    echo ""
+                    echo "Application copied successfully."
+                '''
             }
         }
 
 
-        // =========================================================
-        // STAGE 6 - VERIFY REMOTE FILES
-        // =========================================================
+        // =====================================================
+        // 6. VERIFY REMOTE FILES
+        // =====================================================
 
         stage('Verify Remote Files') {
 
             steps {
 
-                echo '========================================'
-                echo '         VERIFY REMOTE FILES'
-                echo '========================================'
+                echo '''
+========================================
+         VERIFY REMOTE FILES
+========================================
+'''
 
-                sshagent(credentials: [env.SSH_CREDENTIAL_ID]) {
+                sh '''
+                    set -eu
 
-                    sh '''
-                        set -eu
+                    echo "Checking application directory..."
 
-                        ssh \
-                            -o BatchMode=yes \
-                            -o ConnectTimeout=10 \
-                            -o StrictHostKeyChecking=no \
-                            ${REMOTE_USER}@${REMOTE_HOST} \
-                            "test -f '${REMOTE_APP_DIR}/requirements.txt'"
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "ls -la '${REMOTE_APP_DIR}'"
 
-                        echo "requirements.txt found."
+                    echo ""
+                    echo "Checking requirements.txt..."
 
-                        ssh \
-                            -o BatchMode=yes \
-                            -o ConnectTimeout=10 \
-                            -o StrictHostKeyChecking=no \
-                            ${REMOTE_USER}@${REMOTE_HOST} \
-                            "test -f '${REMOTE_APP_DIR}/service/${SERVICE_NAME}.service'"
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "test -f '${REMOTE_APP_DIR}/requirements.txt'"
 
-                        echo "Systemd service file found."
+                    echo "requirements.txt found."
 
-                        echo ""
-                        echo "Remote files verified successfully."
-                    '''
-                }
+                    echo ""
+                    echo "Checking systemd service file..."
+
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "test -f '${REMOTE_APP_DIR}/service/${SERVICE_NAME}.service'"
+
+                    echo "Systemd service file found."
+
+                    echo ""
+                    echo "Remote files verified successfully."
+                '''
             }
         }
 
 
-        // =========================================================
-        // STAGE 7 - INSTALL REMOTE DEPENDENCIES
-        // =========================================================
+        // =====================================================
+        // 7. INSTALL REMOTE DEPENDENCIES
+        // =====================================================
 
         stage('Install Remote Dependencies') {
 
             steps {
 
-                echo '========================================'
-                echo '     INSTALL REMOTE DEPENDENCIES'
-                echo '========================================'
+                echo '''
+========================================
+     INSTALL REMOTE DEPENDENCIES
+========================================
+'''
 
-                sshagent(credentials: [env.SSH_CREDENTIAL_ID]) {
+                sh '''
+                    set -eu
 
-                    sh '''
-                        set -eu
-
-                        ssh \
-                            -o BatchMode=yes \
-                            -o ConnectTimeout=10 \
-                            -o StrictHostKeyChecking=no \
-                            ${REMOTE_USER}@${REMOTE_HOST} \
-                            "REMOTE_APP_DIR='${REMOTE_APP_DIR}' bash -s" << 'REMOTE_SCRIPT'
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "REMOTE_APP_DIR='${REMOTE_APP_DIR}' bash -s" << 'REMOTE_SCRIPT'
 
 set -eu
 
@@ -372,6 +404,7 @@ echo "========================================"
 
 cd "${REMOTE_APP_DIR}"
 
+echo ""
 echo "Application directory:"
 pwd
 
@@ -403,52 +436,45 @@ echo "Upgrading pip..."
 
 
 echo ""
-echo "Installing application dependencies..."
+echo "Installing dependencies..."
 
 ./venv/bin/python \
     -m pip install -r requirements.txt
 
 
 echo ""
-echo "Checking installed packages..."
-
-./venv/bin/python \
-    -m pip list
-
-
-echo ""
 echo "Remote dependencies installed successfully."
 
 REMOTE_SCRIPT
-                    '''
-                }
+                '''
             }
         }
 
 
-        // =========================================================
-        // STAGE 8 - INSTALL SYSTEMD SERVICE
-        // =========================================================
+        // =====================================================
+        // 8. INSTALL SYSTEMD SERVICE
+        // =====================================================
 
         stage('Install Systemd Service') {
 
             steps {
 
-                echo '========================================'
-                echo '       INSTALL SYSTEMD SERVICE'
-                echo '========================================'
+                echo '''
+========================================
+       INSTALL SYSTEMD SERVICE
+========================================
+'''
 
-                sshagent(credentials: [env.SSH_CREDENTIAL_ID]) {
+                sh '''
+                    set -eu
 
-                    sh '''
-                        set -eu
-
-                        ssh \
-                            -o BatchMode=yes \
-                            -o ConnectTimeout=10 \
-                            -o StrictHostKeyChecking=no \
-                            ${REMOTE_USER}@${REMOTE_HOST} \
-                            "REMOTE_APP_DIR='${REMOTE_APP_DIR}' SERVICE_NAME='${SERVICE_NAME}' bash -s" << 'REMOTE_SCRIPT'
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "REMOTE_APP_DIR='${REMOTE_APP_DIR}' SERVICE_NAME='${SERVICE_NAME}' bash -s" << 'REMOTE_SCRIPT'
 
 set -eu
 
@@ -462,6 +488,7 @@ SERVICE_SOURCE="${REMOTE_APP_DIR}/service/${SERVICE_NAME}.service"
 SERVICE_DEST="/etc/systemd/system/${SERVICE_NAME}.service"
 
 
+echo ""
 echo "Service source:"
 echo "${SERVICE_SOURCE}"
 
@@ -472,7 +499,8 @@ echo "${SERVICE_DEST}"
 
 if [ ! -f "${SERVICE_SOURCE}" ]; then
 
-    echo "ERROR: Systemd service file not found:"
+    echo ""
+    echo "ERROR: Service file not found:"
     echo "${SERVICE_SOURCE}"
 
     exit 1
@@ -507,51 +535,45 @@ sudo systemctl enable "${SERVICE_NAME}"
 echo ""
 echo "Systemd service installed successfully."
 
-
-echo ""
-echo "Service configuration:"
-
-sudo systemctl cat "${SERVICE_NAME}"
-
-
 REMOTE_SCRIPT
-                    '''
-                }
+                '''
             }
         }
 
 
-        // =========================================================
-        // STAGE 9 - RESTART APPLICATION
-        // =========================================================
+        // =====================================================
+        // 9. RESTART APPLICATION
+        // =====================================================
 
         stage('Restart Application') {
 
             steps {
 
-                echo '========================================'
-                echo '        RESTART APPLICATION'
-                echo '========================================'
+                echo '''
+========================================
+        RESTART APPLICATION
+========================================
+'''
 
-                sshagent(credentials: [env.SSH_CREDENTIAL_ID]) {
+                sh '''
+                    set -eu
 
-                    sh '''
-                        set -eu
-
-                        ssh \
-                            -o BatchMode=yes \
-                            -o ConnectTimeout=10 \
-                            -o StrictHostKeyChecking=no \
-                            ${REMOTE_USER}@${REMOTE_HOST} \
-                            "SERVICE_NAME='${SERVICE_NAME}' bash -s" << 'REMOTE_SCRIPT'
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "SERVICE_NAME='${SERVICE_NAME}' bash -s" << 'REMOTE_SCRIPT'
 
 set -eu
 
 echo "========================================"
-echo "RESTARTING APPLICATION"
+echo "RESTART APPLICATION"
 echo "========================================"
 
 
+echo ""
 echo "Restarting service..."
 
 sudo systemctl restart "${SERVICE_NAME}"
@@ -565,6 +587,7 @@ sleep 5
 
 echo ""
 echo "Checking service status..."
+
 
 if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
 
@@ -599,35 +622,35 @@ fi
 
 
 REMOTE_SCRIPT
-                    '''
-                }
+                '''
             }
         }
 
 
-        // =========================================================
-        // STAGE 10 - HEALTH CHECK
-        // =========================================================
+        // =====================================================
+        // 10. HEALTH CHECK
+        // =====================================================
 
         stage('Health Check') {
 
             steps {
 
-                echo '========================================'
-                echo '           HEALTH CHECK'
-                echo '========================================'
+                echo '''
+========================================
+           HEALTH CHECK
+========================================
+'''
 
-                sshagent(credentials: [env.SSH_CREDENTIAL_ID]) {
+                sh '''
+                    set -eu
 
-                    sh '''
-                        set -eu
-
-                        ssh \
-                            -o BatchMode=yes \
-                            -o ConnectTimeout=10 \
-                            -o StrictHostKeyChecking=no \
-                            ${REMOTE_USER}@${REMOTE_HOST} \
-                            "PORT='${PORT}' SERVICE_NAME='${SERVICE_NAME}' bash -s" << 'REMOTE_SCRIPT'
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "PORT='${PORT}' SERVICE_NAME='${SERVICE_NAME}' bash -s" << 'REMOTE_SCRIPT'
 
 set -eu
 
@@ -636,6 +659,7 @@ echo "FASTAPI HEALTH CHECK"
 echo "========================================"
 
 
+echo ""
 echo "Checking port ${PORT}..."
 
 
@@ -645,6 +669,7 @@ if sudo ss -lntp | grep -q ":${PORT} "; then
 
 else
 
+    echo ""
     echo "ERROR: Port ${PORT} is not listening."
 
     echo ""
@@ -682,6 +707,7 @@ HTTP_STATUS=$(curl \
     "http://127.0.0.1:${PORT}/docs")
 
 
+echo ""
 echo "HTTP Status: ${HTTP_STATUS}"
 
 
@@ -728,39 +754,43 @@ echo "========================================"
 echo "       HEALTH CHECK SUCCESSFUL"
 echo "========================================"
 
-
 REMOTE_SCRIPT
-                    '''
-                }
+                '''
             }
         }
 
 
-        // =========================================================
-        // STAGE 11 - SHOW DEPLOYMENT INFORMATION
-        // =========================================================
+        // =====================================================
+        // 11. DEPLOYMENT INFORMATION
+        // =====================================================
 
         stage('Deployment Information') {
 
             steps {
 
-                echo '========================================'
-                echo '       DEPLOYMENT INFORMATION'
-                echo '========================================'
+                echo '''
+========================================
+       DEPLOYMENT INFORMATION
+========================================
+'''
 
-                sshagent(credentials: [env.SSH_CREDENTIAL_ID]) {
+                sh '''
+                    set -eu
 
-                    sh '''
-                        set -eu
-
-                        ssh \
-                            -o BatchMode=yes \
-                            -o ConnectTimeout=10 \
-                            -o StrictHostKeyChecking=no \
-                            ${REMOTE_USER}@${REMOTE_HOST} \
-                            "SERVICE_NAME='${SERVICE_NAME}' PORT='${PORT}' bash -s" << 'REMOTE_SCRIPT'
+                    ssh \
+                        -i "${SSH_KEY}" \
+                        -o BatchMode=yes \
+                        -o ConnectTimeout=10 \
+                        -o StrictHostKeyChecking=no \
+                        "${REMOTE_USER}@${REMOTE_HOST}" \
+                        "SERVICE_NAME='${SERVICE_NAME}' PORT='${PORT}' REMOTE_APP_DIR='${REMOTE_APP_DIR}' bash -s" << 'REMOTE_SCRIPT'
 
 set -eu
+
+echo ""
+echo "========================================"
+echo "DEPLOYMENT DETAILS"
+echo "========================================"
 
 echo ""
 echo "Server:"
@@ -775,6 +805,10 @@ echo "Port:"
 echo "${PORT}"
 
 echo ""
+echo "Application directory:"
+echo "${REMOTE_APP_DIR}"
+
+echo ""
 echo "Service status:"
 
 sudo systemctl status \
@@ -787,16 +821,15 @@ echo "Listening port:"
 sudo ss -lntp | grep ":${PORT} " || true
 
 REMOTE_SCRIPT
-                    '''
-                }
+                '''
             }
         }
     }
 
 
-    // =========================================================
+    // =====================================================
     // POST BUILD
-    // =========================================================
+    // =====================================================
 
     post {
 
@@ -823,24 +856,19 @@ REMOTE_SCRIPT
 ========================================
 '''
 
-            echo "Please check the failed stage above."
             echo "Application : ${SERVICE_NAME}"
             echo "Server      : ${REMOTE_HOST}"
+            echo "Port        : ${PORT}"
         }
 
 
         always {
 
-            echo 'Cleaning Jenkins workspace...'
+            echo "Cleaning Jenkins workspace..."
 
             sh '''
                 rm -rf .build-venv || true
             '''
-
-            cleanWs(
-                deleteDirs: true,
-                disableDeferredWipeout: true
-            )
         }
     }
 }
