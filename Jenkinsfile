@@ -48,6 +48,12 @@ pipeline {
         PORT = '8001'
 
         // =====================================================
+        // PYTHON
+        // =====================================================
+
+        PYTHON_BIN = 'python3.14'
+
+        // =====================================================
         // SSH PRIVATE KEY
         // =====================================================
 
@@ -394,7 +400,7 @@ pipeline {
                         -o ConnectTimeout=10 \
                         -o StrictHostKeyChecking=no \
                         "${REMOTE_USER}@${REMOTE_HOST}" \
-                        "REMOTE_APP_DIR='${REMOTE_APP_DIR}' bash -s" << 'REMOTE_SCRIPT'
+                        "REMOTE_APP_DIR='${REMOTE_APP_DIR}' PYTHON_BIN='${PYTHON_BIN}' bash -s" << 'REMOTE_SCRIPT'
 
 set -eu
 
@@ -408,25 +414,147 @@ echo ""
 echo "Application directory:"
 pwd
 
+
+# =====================================================
+# CHECK PYTHON
+# =====================================================
+
 echo ""
-echo "Python version:"
-python3 --version
+echo "Checking Python..."
 
-
-if [ ! -d "venv" ]; then
+if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
 
     echo ""
-    echo "Creating production virtual environment..."
+    echo "ERROR: ${PYTHON_BIN} is not installed."
 
-    python3 -m venv venv
+    echo ""
+    echo "Available Python versions:"
+
+    command -v python3 || true
+    python3 --version || true
+
+    exit 1
+
+fi
+
+
+echo ""
+echo "Python version:"
+
+"${PYTHON_BIN}" --version
+
+
+# =====================================================
+# CHECK / INSTALL PYTHON VENV PACKAGE
+# =====================================================
+
+echo ""
+echo "Checking Python virtual environment support..."
+
+
+if "${PYTHON_BIN}" -m venv --help >/dev/null 2>&1; then
+
+    echo "Python venv support is already available."
 
 else
 
     echo ""
-    echo "Production virtual environment already exists."
+    echo "Python venv support is missing."
+
+    echo ""
+    echo "Installing python3.14-venv..."
+
+    sudo apt-get update
+
+    sudo apt-get install -y python3.14-venv
 
 fi
 
+
+# =====================================================
+# VERIFY VENV AFTER INSTALLATION
+# =====================================================
+
+echo ""
+echo "Verifying Python venv support..."
+
+if ! "${PYTHON_BIN}" -m venv --help >/dev/null 2>&1; then
+
+    echo ""
+    echo "ERROR: Python venv support is still unavailable."
+
+    echo ""
+    echo "Installed Python packages:"
+
+    dpkg -l | grep -E 'python3.14|python3-venv' || true
+
+    exit 1
+
+fi
+
+
+echo ""
+echo "Python venv support verified successfully."
+
+
+# =====================================================
+# CREATE PRODUCTION VIRTUAL ENVIRONMENT
+# =====================================================
+
+echo ""
+echo "Creating production virtual environment..."
+
+
+if [ -d "venv" ]; then
+
+    echo "Existing virtual environment found."
+
+    echo "Removing old virtual environment..."
+
+    rm -rf venv
+
+fi
+
+
+"${PYTHON_BIN}" -m venv venv
+
+
+echo ""
+echo "Production virtual environment created."
+
+
+# =====================================================
+# VERIFY VIRTUAL ENVIRONMENT
+# =====================================================
+
+echo ""
+echo "Verifying virtual environment..."
+
+if [ ! -x "venv/bin/python" ]; then
+
+    echo ""
+    echo "ERROR: venv/bin/python was not created."
+
+    exit 1
+
+fi
+
+
+echo ""
+echo "Virtual environment Python:"
+
+./venv/bin/python --version
+
+
+echo ""
+echo "Virtual environment pip:"
+
+./venv/bin/python -m pip --version
+
+
+# =====================================================
+# UPGRADE PIP
+# =====================================================
 
 echo ""
 echo "Upgrading pip..."
@@ -435,15 +563,41 @@ echo "Upgrading pip..."
     -m pip install --upgrade pip
 
 
+# =====================================================
+# INSTALL APPLICATION DEPENDENCIES
+# =====================================================
+
 echo ""
-echo "Installing dependencies..."
+echo "Installing application dependencies..."
 
 ./venv/bin/python \
-    -m pip install -r requirements.txt
+    -m pip install \
+    --no-cache-dir \
+    -r requirements.txt
+
+
+# =====================================================
+# VERIFY IMPORTANT PACKAGES
+# =====================================================
+
+echo ""
+echo "Verifying FastAPI installation..."
+
+./venv/bin/python \
+    -c "import fastapi; print('FastAPI:', fastapi.__version__)"
 
 
 echo ""
-echo "Remote dependencies installed successfully."
+echo "Verifying Uvicorn installation..."
+
+./venv/bin/python \
+    -c "import uvicorn; print('Uvicorn:', uvicorn.__version__)"
+
+
+echo ""
+echo "========================================"
+echo " REMOTE DEPENDENCIES INSTALLED SUCCESSFULLY"
+echo "========================================"
 
 REMOTE_SCRIPT
                 '''
