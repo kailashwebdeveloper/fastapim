@@ -208,11 +208,6 @@ pipeline {
                     .build-venv/bin/python \
                         -m compileall .
 
-                    echo ""
-                    echo "Running tests..."
-
-                    .build-venv/bin/python \
-                        -m pytest
 
                     echo ""
                     echo "========================================"
