@@ -37,6 +37,12 @@ pipeline {
 
     stages {
 
+        /*
+         * ============================================================
+         * CHECKOUT
+         * ============================================================
+         */
+
         stage('Checkout') {
             steps {
                 echo '========================================'
@@ -65,6 +71,13 @@ pipeline {
                 '''
             }
         }
+
+
+        /*
+         * ============================================================
+         * VERIFY JENKINS ENVIRONMENT
+         * ============================================================
+         */
 
         stage('Verify Jenkins Environment') {
             steps {
@@ -106,6 +119,13 @@ pipeline {
             }
         }
 
+
+        /*
+         * ============================================================
+         * TEST SSH
+         * ============================================================
+         */
+
         stage('Test SSH Connection') {
             steps {
                 echo '========================================'
@@ -139,6 +159,13 @@ pipeline {
             }
         }
 
+
+        /*
+         * ============================================================
+         * BUILD
+         * ============================================================
+         */
+
         stage('Build') {
             steps {
                 echo '========================================'
@@ -171,7 +198,9 @@ pipeline {
                     echo "Installing dependencies..."
 
                     .build-venv/bin/python \
-                        -m pip install -r requirements.txt
+                        -m pip install \
+                        --no-cache-dir \
+                        -r requirements.txt
 
                     echo ""
                     echo "Compiling Python source..."
@@ -180,13 +209,25 @@ pipeline {
                         -m compileall .
 
                     echo ""
+                    echo "Running tests..."
 
+                    .build-venv/bin/python \
+                        -m pytest
+
+                    echo ""
                     echo "========================================"
                     echo "BUILD SUCCESSFUL"
                     echo "========================================"
                 '''
             }
         }
+
+
+        /*
+         * ============================================================
+         * DEPLOY APPLICATION SOURCE
+         * ============================================================
+         */
 
         stage('Deploy Application') {
             steps {
@@ -225,6 +266,7 @@ pipeline {
                         --exclude='.git' \
                         --exclude='.build-venv' \
                         --exclude='venv' \
+                        --exclude='venv_new' \
                         --exclude='.env' \
                         --exclude='__pycache__' \
                         --exclude='*.pyc' \
@@ -238,6 +280,13 @@ pipeline {
             }
         }
 
+
+        /*
+         * ============================================================
+         * VERIFY REMOTE FILES
+         * ============================================================
+         */
+
         stage('Verify Remote Files') {
             steps {
                 echo '========================================'
@@ -248,6 +297,7 @@ pipeline {
                     set -eu
 
                     echo "Application directory:"
+
                     ssh \
                         -i "${SSH_KEY}" \
                         -o BatchMode=yes \
@@ -300,6 +350,36 @@ pipeline {
                 '''
             }
         }
+
+
+        /*
+         * ============================================================
+         * INSTALL REMOTE DEPENDENCIES
+         *
+         * IMPORTANT:
+         *
+         * OLD:
+         *
+         *     venv_new
+         *       ↓
+         *     install packages
+         *       ↓
+         *     mv venv_new venv
+         *
+         * NEW:
+         *
+         *     remove venv
+         *       ↓
+         *     create venv directly at /opt/fastapi-app/venv
+         *       ↓
+         *     install packages
+         *
+         * This prevents absolute shebangs such as:
+         *
+         * #!/opt/fastapi-app/venv_new/bin/python
+         *
+         * ============================================================
+         */
 
         stage('Install Remote Dependencies') {
             steps {
@@ -386,74 +466,217 @@ echo "Verifying venv module..."
 
 echo "Python venv support verified."
 
-echo ""
-echo "Creating temporary virtual environment..."
 
-TEMP_VENV="${REMOTE_APP_DIR}/venv_new"
-
-rm -rf "${TEMP_VENV}"
-
-"${PYTHON_BIN}" -m venv "${TEMP_VENV}"
+# ------------------------------------------------------------
+# REMOVE OLD PRODUCTION VENV
+# ------------------------------------------------------------
 
 echo ""
-echo "Temporary virtual environment created."
+echo "Removing old production virtual environment..."
+
+if [ -d "${REMOTE_APP_DIR}/venv" ]; then
+    rm -rf "${REMOTE_APP_DIR}/venv"
+fi
+
+# Safety cleanup in case an old deployment left venv_new behind.
+
+if [ -d "${REMOTE_APP_DIR}/venv_new" ]; then
+    rm -rf "${REMOTE_APP_DIR}/venv_new"
+fi
+
+
+# ------------------------------------------------------------
+# CREATE PRODUCTION VENV DIRECTLY
+# ------------------------------------------------------------
 
 echo ""
-echo "Checking temporary Python..."
+echo "Creating production virtual environment..."
 
-"${TEMP_VENV}/bin/python" --version
+"${PYTHON_BIN}" -m venv "${REMOTE_APP_DIR}/venv"
 
 echo ""
-echo "Checking temporary pip..."
+echo "Production virtual environment created."
 
-"${TEMP_VENV}/bin/python" -m pip --version
+echo ""
+echo "Production Python:"
+
+"${REMOTE_APP_DIR}/venv/bin/python" --version
+
+echo ""
+echo "Production pip:"
+
+"${REMOTE_APP_DIR}/venv/bin/python" -m pip --version
+
+
+# ------------------------------------------------------------
+# UPGRADE PIP
+# ------------------------------------------------------------
 
 echo ""
 echo "Upgrading pip..."
 
-"${TEMP_VENV}/bin/python" \
+"${REMOTE_APP_DIR}/venv/bin/python" \
     -m pip install --upgrade pip
+
+
+# ------------------------------------------------------------
+# INSTALL DEPENDENCIES
+# ------------------------------------------------------------
 
 echo ""
 echo "Installing application dependencies..."
 
-"${TEMP_VENV}/bin/python" \
+"${REMOTE_APP_DIR}/venv/bin/python" \
     -m pip install \
     --no-cache-dir \
     -r requirements.txt
 
+
+# ------------------------------------------------------------
+# VERIFY UVICORN
+# ------------------------------------------------------------
+
+echo ""
+echo "Checking Uvicorn..."
+
+"${REMOTE_APP_DIR}/venv/bin/python" \
+    -m pip show uvicorn
+
+echo ""
+echo "Uvicorn version:"
+
+"${REMOTE_APP_DIR}/venv/bin/python" \
+    -m uvicorn --version
+
+
+# ------------------------------------------------------------
+# VERIFY UVICORN EXECUTABLE
+# ------------------------------------------------------------
+
+echo ""
+echo "Checking Uvicorn executable..."
+
+test -x "${REMOTE_APP_DIR}/venv/bin/uvicorn"
+
+echo ""
+echo "Uvicorn executable:"
+
+ls -l "${REMOTE_APP_DIR}/venv/bin/uvicorn"
+
+echo ""
+echo "Uvicorn shebang:"
+
+head -1 "${REMOTE_APP_DIR}/venv/bin/uvicorn"
+
+
+# ------------------------------------------------------------
+# VERIFY UVICORN SHEBANG
+# ------------------------------------------------------------
+
+EXPECTED_SHEBANG="#!${REMOTE_APP_DIR}/venv/bin/python"
+
+ACTUAL_SHEBANG="\$(head -1 "${REMOTE_APP_DIR}/venv/bin/uvicorn")"
+
+echo ""
+echo "Expected Uvicorn shebang:"
+echo "${EXPECTED_SHEBANG}"
+
+echo ""
+echo "Actual Uvicorn shebang:"
+echo "${ACTUAL_SHEBANG}"
+
+if [ "\${ACTUAL_SHEBANG}" != "\${EXPECTED_SHEBANG}" ]; then
+
+    echo ""
+    echo "ERROR: Uvicorn executable has an incorrect Python interpreter."
+
+    echo ""
+    echo "Expected:"
+    echo "\${EXPECTED_SHEBANG}"
+
+    echo ""
+    echo "Actual:"
+    echo "\${ACTUAL_SHEBANG}"
+
+    exit 1
+fi
+
+echo ""
+echo "Uvicorn shebang verified."
+
+
+# ------------------------------------------------------------
+# VERIFY FASTAPI IMPORT
+# ------------------------------------------------------------
+
 echo ""
 echo "Testing FastAPI import..."
 
-"${TEMP_VENV}/bin/python" \
+"${REMOTE_APP_DIR}/venv/bin/python" \
     -c "from main import app; print('FastAPI application import successful')"
 
-echo ""
-echo "Replacing production virtual environment..."
 
-if [ -d "venv" ]; then
-    rm -rf venv
+# ------------------------------------------------------------
+# VERIFY APPLICATION MODULE
+# ------------------------------------------------------------
+
+echo ""
+echo "Testing Uvicorn application startup..."
+
+timeout 10 \
+    "${REMOTE_APP_DIR}/venv/bin/python" \
+    -m uvicorn \
+    main:app \
+    --host 127.0.0.1 \
+    --port 18001 \
+    > /tmp/fastapi-startup-test.log 2>&1 &
+
+TEST_PID=\$!
+
+sleep 3
+
+if kill -0 "\${TEST_PID}" 2>/dev/null; then
+
+    echo "FastAPI startup test successful."
+
+    kill "\${TEST_PID}" 2>/dev/null || true
+
+else
+
+    echo ""
+    echo "ERROR: FastAPI failed startup test."
+
+    echo ""
+    echo "Startup log:"
+
+    cat /tmp/fastapi-startup-test.log || true
+
+    exit 1
 fi
 
-mv "${TEMP_VENV}" venv
+rm -f /tmp/fastapi-startup-test.log
 
 echo ""
-echo "Final Python version:"
-
-./venv/bin/python --version
-
-echo ""
-echo "Final pip version:"
-
-./venv/bin/python -m pip --version
-
-echo ""
-echo "Remote dependencies installed successfully."
+echo "========================================"
+echo "REMOTE DEPENDENCY INSTALLATION SUCCESSFUL"
+echo "========================================"
 
 REMOTE_SCRIPT
                 '''
             }
         }
+
+
+        /*
+         * ============================================================
+         * INSTALL SYSTEMD SERVICE
+         *
+         * The service file in GitHub should contain:
+         *
+         * ExecStart=/opt/fastapi-app/venv/bin/python -m uvicorn ...
+         *
+         * ============================================================
+         */
 
         stage('Install Systemd Service') {
             steps {
@@ -501,6 +724,25 @@ echo "Service file:"
 cat "${SERVICE_SOURCE}"
 
 echo ""
+echo "Checking ExecStart..."
+
+if ! grep -q \
+    "/opt/fastapi-app/venv/bin/python -m uvicorn" \
+    "${SERVICE_SOURCE}"; then
+
+    echo ""
+    echo "ERROR: Systemd service must use:"
+    echo ""
+    echo "/opt/fastapi-app/venv/bin/python -m uvicorn"
+    echo ""
+
+    exit 1
+fi
+
+echo ""
+echo "ExecStart verified."
+
+echo ""
 echo "Installing service..."
 
 sudo cp \
@@ -534,6 +776,13 @@ REMOTE_SCRIPT
                 '''
             }
         }
+
+
+        /*
+         * ============================================================
+         * RESTART APPLICATION
+         * ============================================================
+         */
 
         stage('Restart Application') {
             steps {
@@ -611,6 +860,13 @@ REMOTE_SCRIPT
             }
         }
 
+
+        /*
+         * ============================================================
+         * HEALTH CHECK
+         * ============================================================
+         */
+
         stage('Health Check') {
             steps {
                 echo '========================================'
@@ -638,8 +894,11 @@ echo ""
 echo "Checking systemd service..."
 
 if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
+
     echo "Service is active."
+
 else
+
     echo "ERROR: Service is not active."
 
     sudo systemctl status \
@@ -654,12 +913,16 @@ else
     exit 1
 fi
 
+
 echo ""
 echo "Checking port ${PORT}..."
 
 if sudo ss -lntp | grep -q ":${PORT} "; then
+
     echo "Port ${PORT} is listening."
+
 else
+
     echo "ERROR: Port ${PORT} is not listening."
 
     sudo systemctl status \
@@ -673,6 +936,7 @@ else
 
     exit 1
 fi
+
 
 echo ""
 echo "Checking FastAPI /docs..."
@@ -722,6 +986,7 @@ else
 
 fi
 
+
 echo ""
 echo "========================================"
 echo "HEALTH CHECK SUCCESSFUL"
@@ -731,6 +996,13 @@ REMOTE_SCRIPT
                 '''
             }
         }
+
+
+        /*
+         * ============================================================
+         * DEPLOYMENT INFORMATION
+         * ============================================================
+         */
 
         stage('Deployment Information') {
             steps {
@@ -781,6 +1053,14 @@ echo "Pip:"
 "${REMOTE_APP_DIR}/venv/bin/python" -m pip --version
 
 echo ""
+echo "Uvicorn:"
+"${REMOTE_APP_DIR}/venv/bin/python" -m uvicorn --version
+
+echo ""
+echo "Uvicorn shebang:"
+head -1 "${REMOTE_APP_DIR}/venv/bin/uvicorn"
+
+echo ""
 echo "Service status:"
 
 sudo systemctl status \
@@ -811,6 +1091,13 @@ REMOTE_SCRIPT
             }
         }
     }
+
+
+    /*
+     * ================================================================
+     * POST ACTIONS
+     * ================================================================
+     */
 
     post {
 
