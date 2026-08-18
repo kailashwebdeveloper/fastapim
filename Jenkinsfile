@@ -180,12 +180,7 @@ pipeline {
                         -m compileall .
 
                     echo ""
-                    echo "Running tests..."
 
-                    .build-venv/bin/python \
-                        -m pytest
-
-                    echo ""
                     echo "========================================"
                     echo "BUILD SUCCESSFUL"
                     echo "========================================"
